@@ -29,6 +29,9 @@
   .hour-line { height: 30px; border-bottom: 1px solid #f0f0f0; }
   .hour-line:nth-child(odd) { border-bottom-style: dotted; border-bottom-color: #e8e8e8; }
   .session { position: absolute; left: 2px; right: 2px; border-radius: 4px; padding: 2px 5px; font-size: 11px; line-height: 1.25; color: #fff; overflow: hidden; cursor: pointer; box-shadow: 0 1px 2px rgba(0,0,0,0.08); border-left: 3px solid rgba(0,0,0,0.18); }
+  .session.github { background-image: linear-gradient(135deg, rgba(255,255,255,0.06) 0 6px, transparent 6px 12px); border-left-color: rgba(255,255,255,0.45); }
+  .session.event { border-left: 4px solid rgba(255,255,255,0.6); }
+  .badge { display: inline-block; font-size: 9px; padding: 0 4px; margin-right: 3px; background: rgba(0,0,0,0.25); border-radius: 2px; vertical-align: 1px; }
   .session:hover { z-index: 4; box-shadow: 0 2px 8px rgba(0,0,0,0.25); filter: brightness(1.05); }
   .session .title { font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .session .time { opacity: 0.92; font-size: 10px; }
@@ -44,6 +47,9 @@
   <button id="today">Today</button>
   <button id="next" title="Next week">→</button>
   <span id="range"></span>
+  <span class="ctl"><label><input type="checkbox" class="kind-toggle" data-kind="doc" checked> Drive</label></span>
+  <span class="ctl"><label><input type="checkbox" class="kind-toggle" data-kind="github" checked> GitHub</label></span>
+  <span class="ctl"><label><input type="checkbox" class="kind-toggle" data-kind="event" checked> Calendar</label></span>
   <span class="ctl">Merge gap <input id="gap" type="number" value="10" min="1" max="120"> min</span>
   <span class="ctl">Min session <input id="minDur" type="number" value="2" min="1" max="60"> min</span>
   <div class="spacer"></div>
@@ -60,6 +66,7 @@ const DAY_HEIGHT = 24 * 60 * PX_PER_MIN;
 let weekStart = startOfWeek(new Date());
 let mergeGap = 10;
 let minDur = 2;
+let enabledKinds = new Set(['doc', 'github', 'event']);
 
 function startOfWeek(d) {
   const x = new Date(d);
@@ -95,11 +102,18 @@ function escapeHtml(s) {
 
 function buildSessions() {
   const out = [];
-  for (const f of DATA.files) {
-    // Support both new shape (f.sessions: [{start,end}]) and old (f.revisions: [iso])
+  const items = DATA.items || DATA.files || [];
+  for (const f of items) {
+    const kind = f.kind || 'doc';
+    if (!enabledKinds.has(kind)) continue;
     let raw;
     if (f.sessions) {
-      raw = f.sessions.map(s => ({ start: new Date(s.start), end: new Date(s.end) }));
+      raw = f.sessions.map(s => ({
+        start: new Date(s.start),
+        end: new Date(s.end),
+        title: s.title,
+        events: s.events || [],
+      }));
     } else if (f.revisions) {
       raw = f.revisions.map(t => { const d = new Date(t); return { start: d, end: d }; });
     } else {
@@ -107,18 +121,23 @@ function buildSessions() {
     }
     raw.sort((a, b) => a.start - b.start);
     if (!raw.length) continue;
-    // Merge adjacent sessions whose gap (next.start - prev.end) <= mergeGap minutes
-    let cur = { file: f, start: raw[0].start, end: raw[0].end };
-    for (let i = 1; i < raw.length; i++) {
-      const gapMin = (raw[i].start - cur.end) / 60000;
-      if (gapMin <= mergeGap) {
-        if (raw[i].end > cur.end) cur.end = raw[i].end;
-      } else {
-        out.push(cur);
-        cur = { file: f, start: raw[i].start, end: raw[i].end };
+    // Calendar events: never merge adjacent ones — each event keeps its own title/block
+    if (kind === 'event') {
+      for (const r of raw) out.push({ file: f, start: r.start, end: r.end, title: r.title, events: r.events });
+    } else {
+      let cur = { file: f, start: raw[0].start, end: raw[0].end, events: [...(raw[0].events || [])] };
+      for (let i = 1; i < raw.length; i++) {
+        const gapMin = (raw[i].start - cur.end) / 60000;
+        if (gapMin <= mergeGap) {
+          if (raw[i].end > cur.end) cur.end = raw[i].end;
+          if (raw[i].events) cur.events.push(...raw[i].events);
+        } else {
+          out.push(cur);
+          cur = { file: f, start: raw[i].start, end: raw[i].end, events: [...(raw[i].events || [])] };
+        }
       }
+      out.push(cur);
     }
-    out.push(cur);
   }
   for (const s of out) {
     if ((s.end - s.start) / 60000 < minDur) {
@@ -197,14 +216,30 @@ function render() {
       const top = ((segStart - dayStart) / 60000) * PX_PER_MIN;
       const height = Math.max(((segEnd - segStart) / 60000) * PX_PER_MIN, 16);
       const el = document.createElement('div');
-      el.className = 'session';
+      const kind = s.file.kind || 'doc';
+      el.className = 'session ' + kind;
       el.style.top = top + 'px';
       el.style.height = height + 'px';
-      el.style.background = colorFor(s.file.id);
+      el.style.background = s.file.color || colorFor(s.file.id);
       const dur = Math.round((s.end - s.start) / 60000);
-      el.title = s.file.name + '\n' + fmtClock(s.start) + ' – ' + fmtClock(s.end) + '  (' + dur + ' min)\n' + s.file.type;
-      el.onclick = () => { if (s.file.link) window.open(s.file.link, '_blank'); };
-      el.innerHTML = '<div class="title">' + escapeHtml(s.file.name) + '</div>' +
+      const blockTitle = s.title || s.file.name;
+      let tip = blockTitle + '\n' + fmtClock(s.start) + ' – ' + fmtClock(s.end) + '  (' + dur + ' min)\n' + s.file.type;
+      if (kind === 'event' && s.title && s.file.name && s.title !== s.file.name) {
+        tip += '  · ' + s.file.name;
+      }
+      if (s.events && s.events.length && kind !== 'event') {
+        const sample = s.events.slice(0, 6).map(e => '• ' + e.kind + ': ' + e.summary).join('\n');
+        tip += '\n\n' + sample + (s.events.length > 6 ? `\n…+${s.events.length - 6} more` : '');
+      }
+      el.title = tip;
+      el.onclick = () => {
+        const url = (s.events && s.events[0] && s.events[0].link) || s.file.link;
+        if (url) window.open(url, '_blank');
+      };
+      const badge = kind === 'github' ? '<span class="badge">GH</span>'
+                  : kind === 'event'  ? '<span class="badge">📅</span>'
+                  : '';
+      el.innerHTML = '<div class="title">' + badge + escapeHtml(blockTitle) + '</div>' +
         '<div class="time">' + fmtClock(s.start) + '–' + fmtClock(s.end) + '</div>';
       dayCol.appendChild(el);
       if (s.start >= weekStart && s.start < new Date(weekStart.getTime() + 7 * 86400000)) weekCount++;
@@ -212,8 +247,9 @@ function render() {
     grid.appendChild(dayCol);
   }
 
+  const itemCount = (DATA.items || DATA.files || []).length;
   document.getElementById('meta').textContent =
-    weekCount + ' sessions this week · ' + DATA.files.length + ' files tracked · fetched ' +
+    weekCount + ' sessions this week · ' + itemCount + ' items tracked · fetched ' +
     new Date(DATA.fetched_at).toLocaleString();
 
   if (!window.__scrolled) {
@@ -254,6 +290,12 @@ document.getElementById('today').onclick = () => { weekStart = startOfWeek(new D
 document.getElementById('gap').onchange = (e) => { mergeGap = parseInt(e.target.value) || 10; render(); };
 document.getElementById('minDur').onchange = (e) => { minDur = parseInt(e.target.value) || 2; render(); };
 document.getElementById('export').onclick = exportCsv;
+document.querySelectorAll('.kind-toggle').forEach(cb => {
+  cb.addEventListener('change', () => {
+    enabledKinds = new Set(Array.from(document.querySelectorAll('.kind-toggle:checked')).map(c => c.dataset.kind));
+    render();
+  });
+});
 
 document.addEventListener('keydown', (e) => {
   if (e.target.tagName === 'INPUT') return;
@@ -262,7 +304,7 @@ document.addEventListener('keydown', (e) => {
   else if (e.key === 't' || e.key === 'T') document.getElementById('today').click();
 });
 
-if (!DATA.files || !DATA.files.length) {
+if (!(DATA.items || DATA.files || []).length) {
   document.getElementById('grid').innerHTML = '<div class="empty">No activity in the fetched window. Run <code>python fetch.py</code> first.</div>';
 } else {
   render();
