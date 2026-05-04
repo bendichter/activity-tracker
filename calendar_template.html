@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Google Workspace Activity</title>
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, system-ui, sans-serif; margin: 0; background: #f6f7f8; color: #222; }
+  header { display: flex; align-items: center; gap: 10px; padding: 10px 16px; background: #fff; border-bottom: 1px solid #e0e0e0; flex-wrap: wrap; }
+  header h1 { margin: 0; font-size: 15px; font-weight: 600; }
+  button { padding: 5px 11px; border: 1px solid #ccc; background: #fff; cursor: pointer; border-radius: 4px; font-size: 13px; }
+  button:hover { background: #f0f0f0; }
+  button.primary { background: #1a73e8; color: #fff; border-color: #1a73e8; }
+  button.primary:hover { background: #1765c5; }
+  .spacer { flex: 1; }
+  #range { font-weight: 600; min-width: 200px; text-align: center; font-size: 14px; }
+  .ctl { display: flex; align-items: center; gap: 6px; font-size: 13px; color: #555; }
+  .ctl input { width: 50px; padding: 3px 5px; border: 1px solid #ccc; border-radius: 3px; }
+  #meta { font-size: 12px; color: #666; }
+  .grid-wrap { overflow: auto; height: calc(100vh - 53px); background: #fff; }
+  .grid { display: grid; grid-template-columns: 56px repeat(7, 1fr); position: relative; min-width: 760px; }
+  .head { position: sticky; top: 0; background: #fff; padding: 10px 4px; text-align: center; font-size: 12px; font-weight: 500; border-bottom: 1px solid #e0e0e0; border-left: 1px solid #f0f0f0; z-index: 5; }
+  .head.today { color: #1a73e8; }
+  .head .num { font-size: 18px; font-weight: 400; display: block; }
+  .head.today .num { background: #1a73e8; color: #fff; border-radius: 50%; width: 28px; height: 28px; line-height: 28px; margin: 2px auto; }
+  .corner { position: sticky; top: 0; background: #fff; border-bottom: 1px solid #e0e0e0; z-index: 5; }
+  .hour-cell { height: 30px; border-bottom: 1px solid #f0f0f0; font-size: 10px; color: #80868b; text-align: right; padding: 0 6px 0 0; transform: translateY(-6px); }
+  .day-col { position: relative; border-left: 1px solid #f0f0f0; }
+  .hour-line { height: 30px; border-bottom: 1px solid #f0f0f0; }
+  .hour-line:nth-child(odd) { border-bottom-style: dotted; border-bottom-color: #e8e8e8; }
+  .session { position: absolute; left: 2px; right: 2px; border-radius: 4px; padding: 2px 5px; font-size: 11px; line-height: 1.25; color: #fff; overflow: hidden; cursor: pointer; box-shadow: 0 1px 2px rgba(0,0,0,0.08); border-left: 3px solid rgba(0,0,0,0.18); }
+  .session:hover { z-index: 4; box-shadow: 0 2px 8px rgba(0,0,0,0.25); filter: brightness(1.05); }
+  .session .title { font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .session .time { opacity: 0.92; font-size: 10px; }
+  .empty { padding: 60px 20px; text-align: center; color: #888; grid-column: 1 / -1; }
+  .now-line { position: absolute; left: 0; right: 0; height: 2px; background: #ea4335; z-index: 3; pointer-events: none; }
+  .now-line::before { content: ''; position: absolute; left: -5px; top: -4px; width: 10px; height: 10px; border-radius: 50%; background: #ea4335; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Workspace Activity</h1>
+  <button id="prev" title="Previous week">←</button>
+  <button id="today">Today</button>
+  <button id="next" title="Next week">→</button>
+  <span id="range"></span>
+  <span class="ctl">Merge gap <input id="gap" type="number" value="10" min="1" max="120"> min</span>
+  <span class="ctl">Min session <input id="minDur" type="number" value="2" min="1" max="60"> min</span>
+  <div class="spacer"></div>
+  <span id="meta"></span>
+  <button id="export" class="primary">Export Toggl CSV</button>
+</header>
+<div class="grid-wrap" id="grid-wrap">
+  <div class="grid" id="grid"></div>
+</div>
+<script>
+const DATA = __DATA_PLACEHOLDER__;
+const PX_PER_MIN = 0.7;
+const DAY_HEIGHT = 24 * 60 * PX_PER_MIN;
+let weekStart = startOfWeek(new Date());
+let mergeGap = 10;
+let minDur = 2;
+
+function startOfWeek(d) {
+  const x = new Date(d);
+  x.setHours(0, 0, 0, 0);
+  const day = x.getDay();
+  const diff = (day === 0 ? -6 : 1 - day);
+  x.setDate(x.getDate() + diff);
+  return x;
+}
+function pad(n) { return n.toString().padStart(2, '0'); }
+function isoDate(d) { return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()); }
+function isoTime(d) { return pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds()); }
+function fmtRange(a, b) {
+  const sameMonth = a.getMonth() === b.getMonth();
+  const opts = { month: 'short', day: 'numeric' };
+  const left = a.toLocaleDateString(undefined, opts);
+  const right = sameMonth ? b.getDate() : b.toLocaleDateString(undefined, opts);
+  return left + ' – ' + right + ', ' + b.getFullYear();
+}
+function fmtClock(d) { return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }); }
+function durHHMMSS(ms) {
+  const s = Math.round(ms / 1000);
+  return pad(Math.floor(s / 3600)) + ':' + pad(Math.floor((s % 3600) / 60)) + ':' + pad(s % 60);
+}
+function colorFor(id) {
+  let h = 0;
+  for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) >>> 0;
+  return 'hsl(' + (h % 360) + ', 62%, 42%)';
+}
+function escapeHtml(s) {
+  return s.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+function buildSessions() {
+  const out = [];
+  for (const f of DATA.files) {
+    // Support both new shape (f.sessions: [{start,end}]) and old (f.revisions: [iso])
+    let raw;
+    if (f.sessions) {
+      raw = f.sessions.map(s => ({ start: new Date(s.start), end: new Date(s.end) }));
+    } else if (f.revisions) {
+      raw = f.revisions.map(t => { const d = new Date(t); return { start: d, end: d }; });
+    } else {
+      continue;
+    }
+    raw.sort((a, b) => a.start - b.start);
+    if (!raw.length) continue;
+    // Merge adjacent sessions whose gap (next.start - prev.end) <= mergeGap minutes
+    let cur = { file: f, start: raw[0].start, end: raw[0].end };
+    for (let i = 1; i < raw.length; i++) {
+      const gapMin = (raw[i].start - cur.end) / 60000;
+      if (gapMin <= mergeGap) {
+        if (raw[i].end > cur.end) cur.end = raw[i].end;
+      } else {
+        out.push(cur);
+        cur = { file: f, start: raw[i].start, end: raw[i].end };
+      }
+    }
+    out.push(cur);
+  }
+  for (const s of out) {
+    if ((s.end - s.start) / 60000 < minDur) {
+      s.end = new Date(s.start.getTime() + minDur * 60000);
+    }
+  }
+  return out;
+}
+
+function render() {
+  const grid = document.getElementById('grid');
+  grid.innerHTML = '';
+
+  const weekEnd = new Date(weekStart); weekEnd.setDate(weekEnd.getDate() + 6);
+  document.getElementById('range').textContent = fmtRange(weekStart, weekEnd);
+
+  // Corner
+  const corner = document.createElement('div'); corner.className = 'corner head';
+  grid.appendChild(corner);
+
+  // Day headers
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const days = [];
+  for (let i = 0; i < 7; i++) {
+    const d = new Date(weekStart); d.setDate(d.getDate() + i);
+    days.push(d);
+    const h = document.createElement('div');
+    h.className = 'head' + (d.getTime() === today.getTime() ? ' today' : '');
+    h.innerHTML = d.toLocaleDateString(undefined, { weekday: 'short' }).toUpperCase() +
+      '<span class="num">' + d.getDate() + '</span>';
+    grid.appendChild(h);
+  }
+
+  // Hour column
+  const hourCol = document.createElement('div');
+  hourCol.style.gridColumn = '1';
+  for (let h = 0; h < 24; h++) {
+    const c = document.createElement('div');
+    c.className = 'hour-cell';
+    c.style.height = (60 * PX_PER_MIN) + 'px';
+    c.textContent = h === 0 ? '' : (h < 12 ? h + ' AM' : (h === 12 ? '12 PM' : (h - 12) + ' PM'));
+    hourCol.appendChild(c);
+  }
+  grid.appendChild(hourCol);
+
+  // Day columns
+  const sessions = buildSessions();
+  let weekCount = 0;
+  for (let i = 0; i < 7; i++) {
+    const dayCol = document.createElement('div');
+    dayCol.className = 'day-col';
+    dayCol.style.height = DAY_HEIGHT + 'px';
+    for (let h = 0; h < 24; h++) {
+      const ln = document.createElement('div');
+      ln.className = 'hour-line';
+      ln.style.height = (60 * PX_PER_MIN) + 'px';
+      dayCol.appendChild(ln);
+    }
+    const dayStart = days[i];
+    const dayEnd = new Date(dayStart); dayEnd.setDate(dayEnd.getDate() + 1);
+
+    // Now line for today
+    if (dayStart.getTime() === today.getTime()) {
+      const now = new Date();
+      const minutes = (now - dayStart) / 60000;
+      const nl = document.createElement('div');
+      nl.className = 'now-line';
+      nl.style.top = (minutes * PX_PER_MIN) + 'px';
+      dayCol.appendChild(nl);
+    }
+
+    for (const s of sessions) {
+      if (s.end < dayStart || s.start >= dayEnd) continue;
+      const segStart = s.start < dayStart ? dayStart : s.start;
+      const segEnd = s.end > dayEnd ? dayEnd : s.end;
+      const top = ((segStart - dayStart) / 60000) * PX_PER_MIN;
+      const height = Math.max(((segEnd - segStart) / 60000) * PX_PER_MIN, 16);
+      const el = document.createElement('div');
+      el.className = 'session';
+      el.style.top = top + 'px';
+      el.style.height = height + 'px';
+      el.style.background = colorFor(s.file.id);
+      const dur = Math.round((s.end - s.start) / 60000);
+      el.title = s.file.name + '\n' + fmtClock(s.start) + ' – ' + fmtClock(s.end) + '  (' + dur + ' min)\n' + s.file.type;
+      el.onclick = () => { if (s.file.link) window.open(s.file.link, '_blank'); };
+      el.innerHTML = '<div class="title">' + escapeHtml(s.file.name) + '</div>' +
+        '<div class="time">' + fmtClock(s.start) + '–' + fmtClock(s.end) + '</div>';
+      dayCol.appendChild(el);
+      if (s.start >= weekStart && s.start < new Date(weekStart.getTime() + 7 * 86400000)) weekCount++;
+    }
+    grid.appendChild(dayCol);
+  }
+
+  document.getElementById('meta').textContent =
+    weekCount + ' sessions this week · ' + DATA.files.length + ' files tracked · fetched ' +
+    new Date(DATA.fetched_at).toLocaleString();
+
+  if (!window.__scrolled) {
+    document.getElementById('grid-wrap').scrollTop = 7 * 60 * PX_PER_MIN;
+    window.__scrolled = true;
+  }
+}
+
+function exportCsv() {
+  const sessions = buildSessions();
+  const weekEnd = new Date(weekStart); weekEnd.setDate(weekEnd.getDate() + 7);
+  const inWeek = sessions.filter(s => s.end >= weekStart && s.start < weekEnd);
+  const header = ['Email', 'Project', 'Description', 'Start date', 'Start time', 'End date', 'End time', 'Duration'];
+  const rows = [header];
+  for (const s of inWeek) {
+    rows.push([
+      DATA.user_email,
+      s.file.type,
+      s.file.name,
+      isoDate(s.start), isoTime(s.start),
+      isoDate(s.end), isoTime(s.end),
+      durHHMMSS(s.end - s.start),
+    ]);
+  }
+  const csv = rows.map(r => r.map(c => '"' + String(c).replace(/"/g, '""') + '"').join(',')).join('\n');
+  const blob = new Blob([csv], { type: 'text/csv' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'toggl-' + isoDate(weekStart) + '.csv';
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+document.getElementById('prev').onclick = () => { weekStart.setDate(weekStart.getDate() - 7); render(); };
+document.getElementById('next').onclick = () => { weekStart.setDate(weekStart.getDate() + 7); render(); };
+document.getElementById('today').onclick = () => { weekStart = startOfWeek(new Date()); render(); };
+document.getElementById('gap').onchange = (e) => { mergeGap = parseInt(e.target.value) || 10; render(); };
+document.getElementById('minDur').onchange = (e) => { minDur = parseInt(e.target.value) || 2; render(); };
+document.getElementById('export').onclick = exportCsv;
+
+document.addEventListener('keydown', (e) => {
+  if (e.target.tagName === 'INPUT') return;
+  if (e.key === 'ArrowLeft') document.getElementById('prev').click();
+  else if (e.key === 'ArrowRight') document.getElementById('next').click();
+  else if (e.key === 't' || e.key === 'T') document.getElementById('today').click();
+});
+
+if (!DATA.files || !DATA.files.length) {
+  document.getElementById('grid').innerHTML = '<div class="empty">No activity in the fetched window. Run <code>python fetch.py</code> first.</div>';
+} else {
+  render();
+}
+</script>
+</body>
+</html>

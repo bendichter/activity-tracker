@@ -1,0 +1,7 @@
+credentials.json
+token.json
+activity.json
+calendar.html
+.venv/
+__pycache__/
+*.pyc
