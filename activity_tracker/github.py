@@ -9,6 +9,7 @@ from collections import defaultdict
 from datetime import datetime
 
 import requests
+from tqdm import tqdm
 
 from .common import merge_into_sessions, parse_iso
 
@@ -117,13 +118,13 @@ def fetch(since_dt: datetime, until_dt: datetime):
         + _search_paginated("issues", f"is:pull-request commenter:{user} updated:>={since_str}", token, max_pages=10)
     )
     print(f"  {len(commented)} threads with my comments; fetching comment timestamps...")
-    for j, it in enumerate(commented, 1):
+    for it in tqdm(commented, desc="[github] comments", unit="thread"):
         repo = _repo_from_url(it["repository_url"])
         number = it["number"]
         try:
             comments = _get(f"{API}/repos/{repo}/issues/{number}/comments", token, {"per_page": 100})
         except Exception as e:
-            print(f"    skip {repo}#{number}: {e}")
+            tqdm.write(f"    skip {repo}#{number}: {e}")
             continue
         for c in comments:
             if (c.get("user") or {}).get("login") != user:
@@ -137,13 +138,13 @@ def fetch(since_dt: datetime, until_dt: datetime):
     print("[github] fetching PR reviews...")
     reviewed = _search_paginated("issues", f"is:pull-request reviewed-by:{user} updated:>={since_str}", token, max_pages=10)
     print(f"  {len(reviewed)} PRs reviewed; fetching review timestamps...")
-    for j, it in enumerate(reviewed, 1):
+    for it in tqdm(reviewed, desc="[github] reviews", unit="PR"):
         repo = _repo_from_url(it["repository_url"])
         number = it["number"]
         try:
             reviews = _get(f"{API}/repos/{repo}/pulls/{number}/reviews", token, {"per_page": 100})
         except Exception as e:
-            print(f"    skip {repo}#{number}: {e}")
+            tqdm.write(f"    skip {repo}#{number}: {e}")
             continue
         for rv in reviews:
             if (rv.get("user") or {}).get("login") != user:

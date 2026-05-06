@@ -3,6 +3,7 @@ from datetime import datetime
 from pathlib import Path
 
 from googleapiclient.discovery import build
+from tqdm import tqdm
 
 from .common import merge_into_sessions, parse_iso
 
@@ -119,7 +120,7 @@ def fetch(creds, since_dt: datetime, until_dt: datetime):
 
     activity = build("driveactivity", "v2", credentials=creds, cache_discovery=False)
     items = []
-    for i, f in enumerate(files, 1):
+    for f in tqdm(files, desc="[drive] activity", unit="file"):
         timestamps = fetch_activity_for_file(activity, f["id"], since_dt, until_dt)
         sessions = merge_into_sessions(timestamps)
         if not sessions:
@@ -133,6 +134,6 @@ def fetch(creds, since_dt: datetime, until_dt: datetime):
             "link": f"https://drive.google.com/open?id={f['id']}",
             "sessions": sessions,
         })
-        print(f"  [{i}/{len(files)}] {f['name'][:55]:55s}  {len(timestamps):4d} edits / {len(sessions):3d} sessions")
+        tqdm.write(f"  {f['name'][:55]:55s}  {len(timestamps):4d} edits / {len(sessions):3d} sessions")
     items.sort(key=lambda x: x["sessions"][-1]["end"], reverse=True)
     return user_email, items
