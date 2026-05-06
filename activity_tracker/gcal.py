@@ -4,7 +4,7 @@ Excludes all-day events and events the user declined. Each event becomes a
 session within a per-calendar item; the event's summary is carried on the
 session for the calendar UI to display.
 """
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 
 from googleapiclient.discovery import build
 
@@ -74,12 +74,11 @@ def _user_involved(event):
     return False
 
 
-def fetch(creds, since_dt: datetime):
+def fetch(creds, since_dt: datetime, until_dt: datetime):
     cal = build("calendar", "v3", credentials=creds, cache_discovery=False)
     calendars = _list_visible_calendars(cal)
     print(f"[gcal] {len(calendars)} visible calendars")
 
-    until_dt = datetime.now(timezone.utc) + timedelta(days=1)
     time_min = since_dt.isoformat().replace("+00:00", "Z")
     time_max = until_dt.isoformat().replace("+00:00", "Z")
 

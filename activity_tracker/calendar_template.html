@@ -10,8 +10,6 @@
   header h1 { margin: 0; font-size: 15px; font-weight: 600; }
   button { padding: 5px 11px; border: 1px solid #ccc; background: #fff; cursor: pointer; border-radius: 4px; font-size: 13px; }
   button:hover { background: #f0f0f0; }
-  button.primary { background: #1a73e8; color: #fff; border-color: #1a73e8; }
-  button.primary:hover { background: #1765c5; }
   .spacer { flex: 1; }
   #range { font-weight: 600; min-width: 200px; text-align: center; font-size: 14px; }
   .ctl { display: flex; align-items: center; gap: 6px; font-size: 13px; color: #555; }
@@ -54,7 +52,6 @@
   <span class="ctl">Min session <input id="minDur" type="number" value="2" min="1" max="60"> min</span>
   <div class="spacer"></div>
   <span id="meta"></span>
-  <button id="export" class="primary">Export Toggl CSV</button>
 </header>
 <div class="grid-wrap" id="grid-wrap">
   <div class="grid" id="grid"></div>
@@ -76,9 +73,6 @@ function startOfWeek(d) {
   x.setDate(x.getDate() + diff);
   return x;
 }
-function pad(n) { return n.toString().padStart(2, '0'); }
-function isoDate(d) { return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()); }
-function isoTime(d) { return pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds()); }
 function fmtRange(a, b) {
   const sameMonth = a.getMonth() === b.getMonth();
   const opts = { month: 'short', day: 'numeric' };
@@ -87,10 +81,6 @@ function fmtRange(a, b) {
   return left + ' – ' + right + ', ' + b.getFullYear();
 }
 function fmtClock(d) { return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }); }
-function durHHMMSS(ms) {
-  const s = Math.round(ms / 1000);
-  return pad(Math.floor(s / 3600)) + ':' + pad(Math.floor((s % 3600) / 60)) + ':' + pad(s % 60);
-}
 function colorFor(id) {
   let h = 0;
   for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) >>> 0;
@@ -258,38 +248,11 @@ function render() {
   }
 }
 
-function exportCsv() {
-  const sessions = buildSessions();
-  const weekEnd = new Date(weekStart); weekEnd.setDate(weekEnd.getDate() + 7);
-  const inWeek = sessions.filter(s => s.end >= weekStart && s.start < weekEnd);
-  const header = ['Email', 'Project', 'Description', 'Start date', 'Start time', 'End date', 'End time', 'Duration'];
-  const rows = [header];
-  for (const s of inWeek) {
-    rows.push([
-      DATA.user_email,
-      s.file.type,
-      s.file.name,
-      isoDate(s.start), isoTime(s.start),
-      isoDate(s.end), isoTime(s.end),
-      durHHMMSS(s.end - s.start),
-    ]);
-  }
-  const csv = rows.map(r => r.map(c => '"' + String(c).replace(/"/g, '""') + '"').join(',')).join('\n');
-  const blob = new Blob([csv], { type: 'text/csv' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = 'toggl-' + isoDate(weekStart) + '.csv';
-  a.click();
-  URL.revokeObjectURL(url);
-}
-
 document.getElementById('prev').onclick = () => { weekStart.setDate(weekStart.getDate() - 7); render(); };
 document.getElementById('next').onclick = () => { weekStart.setDate(weekStart.getDate() + 7); render(); };
 document.getElementById('today').onclick = () => { weekStart = startOfWeek(new Date()); render(); };
 document.getElementById('gap').onchange = (e) => { mergeGap = parseInt(e.target.value) || 10; render(); };
 document.getElementById('minDur').onchange = (e) => { minDur = parseInt(e.target.value) || 2; render(); };
-document.getElementById('export').onclick = exportCsv;
 document.querySelectorAll('.kind-toggle').forEach(cb => {
   cb.addEventListener('change', () => {
     enabledKinds = new Set(Array.from(document.querySelectorAll('.kind-toggle:checked')).map(c => c.dataset.kind));

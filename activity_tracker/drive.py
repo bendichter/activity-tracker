@@ -35,9 +35,12 @@ def get_user_email(creds) -> str:
     return drive.about().get(fields="user(emailAddress)").execute()["user"]["emailAddress"]
 
 
-def list_owned_files(creds, since_iso: str):
+def list_owned_files(creds, since_iso: str, until_iso: str):
     drive = build("drive", "v3", credentials=creds, cache_discovery=False)
-    q = f"modifiedTime > '{since_iso}' and trashed=false and 'me' in owners"
+    q = (
+        f"modifiedTime > '{since_iso}' and modifiedTime < '{until_iso}' "
+        "and trashed=false and 'me' in owners"
+    )
     files = []
     page_token = None
     while True:
@@ -56,13 +59,15 @@ def list_owned_files(creds, since_iso: str):
     return [f for f in files if f.get("mimeType") != "application/vnd.google-apps.folder"]
 
 
-def fetch_activity_for_file(activity, file_id: str, since_dt: datetime):
+def fetch_activity_for_file(activity, file_id: str, since_dt: datetime, until_dt: datetime):
     events = []
     page_token = None
+    since_str = since_dt.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+    until_str = until_dt.strftime("%Y-%m-%dT%H:%M:%S.000Z")
     while True:
         body = {
             "itemName": f"items/{file_id}",
-            "filter": f'time >= "{since_dt.strftime("%Y-%m-%dT%H:%M:%S.000Z")}"',
+            "filter": f'time >= "{since_str}" AND time < "{until_str}"',
             "consolidationStrategy": {"none": {}},
             "pageSize": 100,
         }
@@ -96,19 +101,20 @@ def fetch_activity_for_file(activity, file_id: str, since_dt: datetime):
     return sorted(set(events))
 
 
-def fetch(creds, since_dt: datetime):
+def fetch(creds, since_dt: datetime, until_dt: datetime):
     """Returns (user_email, items[]). Each item: {kind, id, name, type, link, sessions}."""
     user_email = get_user_email(creds)
     since_iso = since_dt.strftime("%Y-%m-%dT%H:%M:%S")
+    until_iso = until_dt.strftime("%Y-%m-%dT%H:%M:%S")
     print(f"[drive] signed in as {user_email}")
-    print(f"[drive] listing owned files modified since {since_iso}...")
-    files = list_owned_files(creds, since_iso)
+    print(f"[drive] listing owned files modified between {since_iso} and {until_iso}...")
+    files = list_owned_files(creds, since_iso, until_iso)
     print(f"[drive] {len(files)} candidates; querying activity per file...")
 
     activity = build("driveactivity", "v2", credentials=creds, cache_discovery=False)
     items = []
     for i, f in enumerate(files, 1):
-        timestamps = fetch_activity_for_file(activity, f["id"], since_dt)
+        timestamps = fetch_activity_for_file(activity, f["id"], since_dt, until_dt)
         sessions = merge_into_sessions(timestamps)
         if not sessions:
             continue

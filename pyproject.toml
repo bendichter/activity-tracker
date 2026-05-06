@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "activity-tracker"
+version = "0.1.0"
+description = "Visualize your Google Workspace, GitHub, and Calendar activity as a week calendar."
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [{ name = "Ben Dichter", email = "ben.dichter@gmail.com" }]
+license = { text = "MIT" }
+dependencies = [
+    "google-api-python-client>=2.100.0",
+    "google-auth-oauthlib>=1.1.0",
+    "google-auth-httplib2>=0.1.1",
+    "requests>=2.31.0",
+    "python-dotenv>=1.0.0",
+]
+
+[project.scripts]
+activity-tracker = "activity_tracker.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["activity_tracker*"]
+
+[tool.setuptools.package-data]
+activity_tracker = ["calendar_template.html"]

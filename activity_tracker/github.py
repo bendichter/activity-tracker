@@ -6,8 +6,7 @@ repo and merges them into work sessions.
 import os
 import time
 from collections import defaultdict
-from datetime import datetime, timezone
-from pathlib import Path
+from datetime import datetime
 
 import requests
 
@@ -64,7 +63,7 @@ def _repo_from_url(repo_url):
     return repo_url.split("/repos/", 1)[-1] if "/repos/" in repo_url else repo_url
 
 
-def fetch(root: Path, since_dt: datetime):
+def fetch(since_dt: datetime, until_dt: datetime):
     """Returns list of items, one per repo. Each item: {kind:'github', id, name, type, link, sessions}."""
     token = os.environ.get("GITHUB_PAT")
     if not token:
@@ -75,16 +74,22 @@ def fetch(root: Path, since_dt: datetime):
     print(f"[github] signed in as {user}")
 
     since_str = since_dt.strftime("%Y-%m-%d")
+    until_str = until_dt.strftime("%Y-%m-%d")
+    range_str = f"{since_str}..{until_str}"
+
+    def in_range(dt):
+        return since_dt <= dt <= until_dt
+
     # Activity per repo: list of (datetime, kind, summary, link)
     by_repo = defaultdict(list)
 
     # 1. Commits authored
-    print(f"[github] fetching commits since {since_str}...")
-    commits = _search_paginated("commits", f"author:{user} committer-date:>={since_str}", token, max_pages=10)
+    print(f"[github] fetching commits in {range_str}...")
+    commits = _search_paginated("commits", f"author:{user} committer-date:{range_str}", token, max_pages=10)
     for c in commits:
         ts = c["commit"]["committer"]["date"]
         dt = parse_iso(ts)
-        if dt < since_dt:
+        if not in_range(dt):
             continue
         repo = c["repository"]["full_name"]
         by_repo[repo].append((dt, "commit", c["commit"]["message"].split("\n", 1)[0], c["html_url"]))
@@ -93,12 +98,12 @@ def fetch(root: Path, since_dt: datetime):
     # 2. Issues + PRs authored — created_at gives accurate timestamp
     print("[github] fetching issues/PRs authored...")
     authored = (
-        _search_paginated("issues", f"is:issue author:{user} created:>={since_str}", token, max_pages=10)
-        + _search_paginated("issues", f"is:pull-request author:{user} created:>={since_str}", token, max_pages=10)
+        _search_paginated("issues", f"is:issue author:{user} created:{range_str}", token, max_pages=10)
+        + _search_paginated("issues", f"is:pull-request author:{user} created:{range_str}", token, max_pages=10)
     )
     for it in authored:
         dt = parse_iso(it["created_at"])
-        if dt < since_dt:
+        if not in_range(dt):
             continue
         repo = _repo_from_url(it["repository_url"])
         kind = "pr-open" if it.get("pull_request") else "issue-open"
@@ -124,7 +129,7 @@ def fetch(root: Path, since_dt: datetime):
             if (c.get("user") or {}).get("login") != user:
                 continue
             dt = parse_iso(c["created_at"])
-            if dt < since_dt:
+            if not in_range(dt):
                 continue
             by_repo[repo].append((dt, "comment", f"comment on #{number}: {it['title']}", c["html_url"]))
 
@@ -147,7 +152,7 @@ def fetch(root: Path, since_dt: datetime):
             if not ts:
                 continue
             dt = parse_iso(ts)
-            if dt < since_dt:
+            if not in_range(dt):
                 continue
             by_repo[repo].append((dt, "review", f"review on #{number}: {it['title']}", rv.get("html_url", it["html_url"])))
 
