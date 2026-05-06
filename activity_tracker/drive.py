@@ -1,8 +1,10 @@
 """Google Drive activity source: per-file edit events from Drive Activity API."""
+import time
 from datetime import datetime
 from pathlib import Path
 
 from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
 from tqdm import tqdm
 
 from .common import merge_into_sessions, parse_iso
@@ -37,11 +39,13 @@ def get_user_email(creds) -> str:
 
 
 def list_candidate_files(creds, since_iso: str, until_iso: str):
-    """Files modified in window that the user has write access to.
+    """Files in window worth querying activity for.
 
-    Includes files the user owns AND files shared with the user (e.g., docs
-    they collaborate on but don't own). Per-file activity filtering then
-    keeps only timestamps where the user is the actor.
+    Drive's query language can match `'me' in writers` (every doc shared with
+    you that you can edit) but that pool blows up at long windows. So we ask
+    Drive for the wider candidate set, then keep only files where you're the
+    owner OR the most recent modifier — both signals that you actually
+    touched the file recently.
     """
     drive = build("drive", "v3", credentials=creds, cache_discovery=False)
     q = (
@@ -53,7 +57,7 @@ def list_candidate_files(creds, since_iso: str, until_iso: str):
     while True:
         resp = drive.files().list(
             q=q,
-            fields="nextPageToken, files(id, name, mimeType)",
+            fields="nextPageToken, files(id, name, mimeType, ownedByMe, lastModifyingUser/me)",
             pageSize=200,
             pageToken=page_token,
             supportsAllDrives=True,
@@ -63,7 +67,14 @@ def list_candidate_files(creds, since_iso: str, until_iso: str):
         page_token = resp.get("nextPageToken")
         if not page_token:
             break
-    return [f for f in files if f.get("mimeType") != "application/vnd.google-apps.folder"]
+    out = []
+    for f in files:
+        if f.get("mimeType") == "application/vnd.google-apps.folder":
+            continue
+        last_mod_is_me = (f.get("lastModifyingUser") or {}).get("me", False)
+        if f.get("ownedByMe") or last_mod_is_me:
+            out.append(f)
+    return out
 
 
 def fetch_activity_for_file(activity, file_id: str, since_dt: datetime, until_dt: datetime):
@@ -80,10 +91,23 @@ def fetch_activity_for_file(activity, file_id: str, since_dt: datetime, until_dt
         }
         if page_token:
             body["pageToken"] = page_token
-        try:
-            resp = activity.activity().query(body=body).execute()
-        except Exception as e:
-            print(f"    error: {e}")
+        resp = None
+        for attempt in range(6):
+            try:
+                resp = activity.activity().query(body=body).execute()
+                break
+            except HttpError as e:
+                if e.resp.status in (429, 503):
+                    wait = min(2 ** attempt, 30)
+                    time.sleep(wait)
+                    continue
+                tqdm.write(f"    error: {e}")
+                return events
+            except Exception as e:
+                tqdm.write(f"    error: {e}")
+                return events
+        if resp is None:
+            tqdm.write(f"    rate-limited too many times on {file_id}; skipping")
             return events
         for act in resp.get("activities", []):
             is_me = any(
@@ -116,7 +140,7 @@ def fetch(creds, since_dt: datetime, until_dt: datetime):
     print(f"[drive] signed in as {user_email}")
     print(f"[drive] listing files modified between {since_iso} and {until_iso}...")
     files = list_candidate_files(creds, since_iso, until_iso)
-    print(f"[drive] {len(files)} candidates (owned + writable); querying activity per file...")
+    print(f"[drive] {len(files)} candidates (owned + writable, last modifier=me); querying activity per file...")
 
     activity = build("driveactivity", "v2", credentials=creds, cache_discovery=False)
     items = []
