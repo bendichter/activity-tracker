@@ -6,7 +6,7 @@ Useful for reconstructing where your time actually went, writing reports, or bac
 
 ## Sources
 
-- **Google Drive** — Docs, Sheets, Slides, Word, Excel, PDF, etc. that you edited, via the Drive Activity API. Includes files you own *and* files shared with you that you have write access to (e.g., colleagues' docs you collaborate on).
+- **Google Drive** — Docs, Sheets, Slides, Word, Excel, PDF, etc. that you edited, via the Drive Activity API. Covers files you own *and* shared docs you actively work in (i.e., where you're the most recent modifier — the typical collaboration pattern).
 - **Google Calendar** — events on your visible calendars where you're the organizer or a non-declined attendee.
 - **GitHub** — commits authored, issues / PRs opened, comments posted, PR reviews submitted.
 
@@ -76,9 +76,10 @@ open calendar.html
 
 ## Notes & caveats
 
-- Drive: candidate files are those you have write access to and were modified in your window. Per-file, only activity events where *you* are the actor count toward sessions — so a colleague's edits on a shared doc don't show up in your calendar.
+- Drive: candidates are files modified in your window where you have write access, then narrowed to ones you own or were last modified by you. Per-file, only activity events where *you* are the actor count toward sessions — so a colleague's edits on a shared doc don't show up in your calendar. The "last modifier" filter keeps the candidate set bounded (Drive Activity API has a 100 queries/min/user cap), at the cost of missing shared docs you edited mid-window but where someone else made the most recent edit.
 - Drive only stores the revision history Google decides to keep; short edit bursts can be coalesced server-side. Sessions are an approximation, not a keystroke log.
 - GitHub comment / review searches use `updated:>=since` to find threads, then filter the actual comment / review timestamps in-range — so a thread you commented on in your window will be picked up even if it was last updated outside it.
+- Long Drive and GitHub fetches show progress bars (via `tqdm`); on transient `429` rate limits the Drive Activity calls retry with exponential backoff.
 - `token.json`, `credentials.json`, and `.env` are secrets. The included `.gitignore` excludes them.
 
 ## License
