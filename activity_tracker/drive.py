@@ -35,11 +35,17 @@ def get_user_email(creds) -> str:
     return drive.about().get(fields="user(emailAddress)").execute()["user"]["emailAddress"]
 
 
-def list_owned_files(creds, since_iso: str, until_iso: str):
+def list_candidate_files(creds, since_iso: str, until_iso: str):
+    """Files modified in window that the user has write access to.
+
+    Includes files the user owns AND files shared with the user (e.g., docs
+    they collaborate on but don't own). Per-file activity filtering then
+    keeps only timestamps where the user is the actor.
+    """
     drive = build("drive", "v3", credentials=creds, cache_discovery=False)
     q = (
         f"modifiedTime > '{since_iso}' and modifiedTime < '{until_iso}' "
-        "and trashed=false and 'me' in owners"
+        "and trashed=false and 'me' in writers"
     )
     files = []
     page_token = None
@@ -107,9 +113,9 @@ def fetch(creds, since_dt: datetime, until_dt: datetime):
     since_iso = since_dt.strftime("%Y-%m-%dT%H:%M:%S")
     until_iso = until_dt.strftime("%Y-%m-%dT%H:%M:%S")
     print(f"[drive] signed in as {user_email}")
-    print(f"[drive] listing owned files modified between {since_iso} and {until_iso}...")
-    files = list_owned_files(creds, since_iso, until_iso)
-    print(f"[drive] {len(files)} candidates; querying activity per file...")
+    print(f"[drive] listing files modified between {since_iso} and {until_iso}...")
+    files = list_candidate_files(creds, since_iso, until_iso)
+    print(f"[drive] {len(files)} candidates (owned + writable); querying activity per file...")
 
     activity = build("driveactivity", "v2", credentials=creds, cache_discovery=False)
     items = []
