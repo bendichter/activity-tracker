@@ -1,4 +1,5 @@
 """Google Drive activity source: per-file edit events from Drive Activity API."""
+import socket
 import time
 from datetime import datetime
 from pathlib import Path
@@ -8,6 +9,11 @@ from googleapiclient.errors import HttpError
 from tqdm import tqdm
 
 from .common import merge_into_sessions, parse_iso
+
+# httplib2 (used by googleapiclient) has no default socket timeout, so a stalled
+# connection blocks a read forever. Bound every request and retry on timeouts.
+REQUEST_TIMEOUT = 30
+socket.setdefaulttimeout(REQUEST_TIMEOUT)
 
 MIME_LABELS = {
     "application/vnd.google-apps.document": "Doc",
@@ -28,6 +34,21 @@ MIME_LABELS = {
     "application/vnd.oasis.opendocument.spreadsheet": "ODS",
 }
 
+# Only documents / slides / sheets — Google formats and their Office equivalents
+# (Word / PowerPoint / Excel). Everything else (PDF, text, drawings, forms, …) is
+# dropped before we spend an activity query on it.
+ALLOWED_MIMES = {
+    "application/vnd.google-apps.document",
+    "application/vnd.google-apps.spreadsheet",
+    "application/vnd.google-apps.presentation",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    "application/msword",
+    "application/vnd.ms-excel",
+    "application/vnd.ms-powerpoint",
+}
+
 
 def label_of(mime: str) -> str:
     return MIME_LABELS.get(mime, mime.rsplit("/", 1)[-1] if "/" in mime else mime or "File")
@@ -46,30 +67,56 @@ def list_candidate_files(creds, since_iso: str, until_iso: str):
     Drive for the wider candidate set, then keep only files where you're the
     owner OR the most recent modifier — both signals that you actually
     touched the file recently.
+
+    We also push the ALLOWED_MIMES filter into the query itself, so Drive never
+    pages back the tens of thousands of PDFs/images/etc. a bulk data transfer
+    can dump into your account — only docs/slides/sheets come over the wire.
     """
     drive = build("drive", "v3", credentials=creds, cache_discovery=False)
+    mime_clause = " or ".join(f"mimeType = '{m}'" for m in sorted(ALLOWED_MIMES))
     q = (
         f"modifiedTime > '{since_iso}' and modifiedTime < '{until_iso}' "
-        "and trashed=false and 'me' in writers"
+        f"and trashed=false and 'me' in writers and ({mime_clause})"
     )
     files = []
     page_token = None
+    pages = tqdm(desc="[drive] listing pages", unit="page")
     while True:
-        resp = drive.files().list(
-            q=q,
-            fields="nextPageToken, files(id, name, mimeType, ownedByMe, lastModifyingUser/me)",
-            pageSize=200,
-            pageToken=page_token,
-            supportsAllDrives=True,
-            includeItemsFromAllDrives=True,
-        ).execute()
+        resp = None
+        for attempt in range(6):
+            try:
+                resp = drive.files().list(
+                    q=q,
+                    fields="nextPageToken, files(id, name, mimeType, ownedByMe, lastModifyingUser/me)",
+                    pageSize=200,
+                    pageToken=page_token,
+                    supportsAllDrives=True,
+                    includeItemsFromAllDrives=True,
+                ).execute()
+                break
+            except (socket.timeout, TimeoutError, ConnectionError) as e:
+                wait = min(2 ** attempt, 30)
+                tqdm.write(f"[drive] listing timed out ({e}); retry in {wait}s")
+                time.sleep(wait)
+            except HttpError as e:
+                if e.resp.status in (429, 503):
+                    wait = min(2 ** attempt, 30)
+                    tqdm.write(f"[drive] listing rate-limited; retry in {wait}s")
+                    time.sleep(wait)
+                    continue
+                raise
+        if resp is None:
+            raise RuntimeError("Drive file listing failed after repeated timeouts/rate-limits")
         files.extend(resp.get("files", []))
+        pages.update(1)
+        pages.set_postfix_str(f"{len(files)} files")
         page_token = resp.get("nextPageToken")
         if not page_token:
             break
+    pages.close()
     out = []
     for f in files:
-        if f.get("mimeType") == "application/vnd.google-apps.folder":
+        if f.get("mimeType") not in ALLOWED_MIMES:
             continue
         last_mod_is_me = (f.get("lastModifyingUser") or {}).get("me", False)
         if f.get("ownedByMe") or last_mod_is_me:
